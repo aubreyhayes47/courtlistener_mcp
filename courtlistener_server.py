@@ -7,7 +7,9 @@ from typing import Any, Dict, List, Optional
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("courtlistener")
+port = int(os.environ.get("PORT", "8000"))
+
+mcp = FastMCP("courtlistener", host="0.0.0.0", port=port)
 
 API_BASE = "https://www.courtlistener.com/api/rest/v4"
 SEARCH_ENDPOINT = f"{API_BASE}/search/"
@@ -273,5 +275,4 @@ async def courtlistener_resolve_from_url(
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8000"))
-    mcp.run(transport="http", host="0.0.0.0", port=port)
+    mcp.run(transport="streamable-http")
