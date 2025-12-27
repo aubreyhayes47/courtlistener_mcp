@@ -18,7 +18,7 @@ async def server(monkeypatch):
     try:
         yield module
     finally:
-        await module.client.aclose()
+        await module.aclose_client()
 
 
 @pytest.mark.asyncio
@@ -71,6 +71,7 @@ async def test_search_normalization(server):
     assert request.url.params["q"] == "test query"
     assert request.url.params["court"] == "ca1+ca2"
     assert request.url.params["highlight"] == "on"
+    assert request.url.params["page_size"] == "5"
     assert result["approximate"] is True
     assert result["next_cursor"] == "next-cursor"
     assert len(result["results"]) == 1
