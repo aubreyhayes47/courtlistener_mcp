@@ -223,7 +223,7 @@ async def courtlistener_get_cluster(
         "case_name": cluster.get("case_name"),
         "case_name_full": cluster.get("case_name_full"),
         "docket": cluster.get("docket"),
-        "court": None,
+        "court": cluster.get("court"),
         "court_id": cluster.get("court_id"),
         "date_filed": cluster.get("date_filed"),
         "citations": cluster.get("citations"),
@@ -275,4 +275,4 @@ async def courtlistener_resolve_from_url(
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="http", host="0.0.0.0", port=port)
