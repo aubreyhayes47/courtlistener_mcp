@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import logging
 import os
 import re
 from typing import Any, Dict, List, Optional
@@ -18,17 +19,27 @@ SEARCH_ENDPOINT = f"{API_BASE}/search/"
 CLUSTERS_ENDPOINT = f"{API_BASE}/clusters"
 OPINIONS_ENDPOINT = f"{API_BASE}/opinions"
 
-DEFAULT_TIMEOUT = httpx.Timeout(20.0)
+DEFAULT_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+CLIENT_LIMITS = httpx.Limits(max_connections=10, max_keepalive_connections=5)
+USER_AGENT = "courtlistener-mcp/1.0 (+https://www.courtlistener.com/)"
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_REQUEST_RETRIES = 3
 
 # Lazily created shared async client to avoid import-time side effects.
 client: Optional[httpx.AsyncClient] = None
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 def _get_api_token() -> str:
     token = os.environ.get("COURTLISTENER_API_TOKEN")
     if not token:
         raise RuntimeError("Missing COURTLISTENER_API_TOKEN environment variable")
-    return token
+    cleaned = token.strip()
+    if not cleaned:
+        raise RuntimeError("COURTLISTENER_API_TOKEN is empty or whitespace only")
+    return cleaned
 
 
 async def _get_client() -> httpx.AsyncClient:
@@ -39,8 +50,9 @@ async def _get_client() -> httpx.AsyncClient:
         headers = {
             "Authorization": f"Token {token}",
             "Accept": "application/json",
+            "User-Agent": USER_AGENT,
         }
-        client = httpx.AsyncClient(headers=headers, timeout=DEFAULT_TIMEOUT)
+        client = httpx.AsyncClient(headers=headers, timeout=DEFAULT_TIMEOUT, limits=CLIENT_LIMITS)
     return client
 
 
@@ -80,30 +92,67 @@ def _approximate_count_flag(result_type: str, count: int) -> bool:
     return result_type in {"d", "r", "rd"} and count > 2000
 
 
+async def _request_json(
+    method: str,
+    url: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Make an HTTP request with retries, consistent errors, and structured logging.
+
+    Retries are limited to known-transient errors to avoid duplicating state-changing requests.
+    """
+
+    client_instance = await _get_client()
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, MAX_REQUEST_RETRIES + 1):
+        try:
+            resp = await client_instance.request(method, url, params=params, json=json_body)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            should_retry = status in RETRYABLE_STATUS_CODES and attempt < MAX_REQUEST_RETRIES
+            log_data = {
+                "status": status,
+                "url": str(e.request.url),
+                "attempt": attempt,
+                "retry": should_retry,
+            }
+            logger.warning("CourtListener HTTP error", extra=log_data)
+            if should_retry:
+                await asyncio.sleep(0.5 * attempt)
+                last_error = e
+                continue
+            raise RuntimeError(f"CourtListener HTTP error {status}: {e.response.text[:500]}")
+        except httpx.RequestError as e:
+            should_retry = attempt < MAX_REQUEST_RETRIES
+            logger.warning(
+                "CourtListener request error", extra={"attempt": attempt, "retry": should_retry, "url": url}
+            )
+            if should_retry:
+                await asyncio.sleep(0.5 * attempt)
+                last_error = e
+                continue
+            raise RuntimeError(f"CourtListener request error: {str(e)}")
+
+    # If we exit the loop without returning, surface the last error context.
+    if last_error:
+        raise RuntimeError(f"CourtListener request failed after retries: {last_error}")
+    raise RuntimeError("CourtListener request failed for unknown reasons")
+
+
 async def _get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """GET JSON with consistent error messages."""
-    try:
-        client_instance = await _get_client()
-        resp = await client_instance.get(url, params=params)
-        resp.raise_for_status()
-        return resp.json()
-    except httpx.HTTPStatusError as e:
-        raise RuntimeError(f"CourtListener HTTP error {e.response.status_code}: {e.response.text[:500]}")
-    except httpx.RequestError as e:
-        raise RuntimeError(f"CourtListener request error: {str(e)}")
+    """GET JSON with consistent error messages and retry behavior."""
+    return await _request_json("GET", url, params=params)
 
 
 async def _post_json(url: str, json_body: Dict[str, Any], params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """POST JSON with consistent error messages."""
-    try:
-        client_instance = await _get_client()
-        resp = await client_instance.post(url, params=params, json=json_body)
-        resp.raise_for_status()
-        return resp.json()
-    except httpx.HTTPStatusError as e:
-        raise RuntimeError(f"CourtListener HTTP error {e.response.status_code}: {e.response.text[:500]}")
-    except httpx.RequestError as e:
-        raise RuntimeError(f"CourtListener request error: {str(e)}")
+    """POST JSON with consistent error messages and retry behavior."""
+    return await _request_json("POST", url, params=params, json_body=json_body)
 
 
 def _courts_param(courts: Optional[List[str]]) -> Optional[str]:
