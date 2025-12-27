@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import atexit
 import os
 import re
 from typing import Any, Dict, List, Optional
@@ -16,18 +18,53 @@ SEARCH_ENDPOINT = f"{API_BASE}/search/"
 CLUSTERS_ENDPOINT = f"{API_BASE}/clusters"
 OPINIONS_ENDPOINT = f"{API_BASE}/opinions"
 
-API_TOKEN = os.environ.get("COURTLISTENER_API_TOKEN")
-if not API_TOKEN:
-    raise RuntimeError("Missing COURTLISTENER_API_TOKEN environment variable")
-
 DEFAULT_TIMEOUT = httpx.Timeout(20.0)
-HEADERS = {
-    "Authorization": f"Token {API_TOKEN}",
-    "Accept": "application/json",
-}
 
-# Shared async client. Create once per process.
-client = httpx.AsyncClient(headers=HEADERS, timeout=DEFAULT_TIMEOUT)
+# Lazily created shared async client to avoid import-time side effects.
+client: Optional[httpx.AsyncClient] = None
+
+
+def _get_api_token() -> str:
+    token = os.environ.get("COURTLISTENER_API_TOKEN")
+    if not token:
+        raise RuntimeError("Missing COURTLISTENER_API_TOKEN environment variable")
+    return token
+
+
+async def _get_client() -> httpx.AsyncClient:
+    """Create (lazily) and return a shared AsyncClient."""
+    global client
+    if client is None:
+        token = _get_api_token()
+        headers = {
+            "Authorization": f"Token {token}",
+            "Accept": "application/json",
+        }
+        client = httpx.AsyncClient(headers=headers, timeout=DEFAULT_TIMEOUT)
+    return client
+
+
+async def aclose_client() -> None:
+    """Close the shared AsyncClient if it exists."""
+    global client
+    if client is not None:
+        await client.aclose()
+        client = None
+
+
+def _schedule_client_close() -> None:
+    """Best-effort cleanup for environments that import the module."""
+    if client is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(aclose_client())
+    else:
+        loop.create_task(aclose_client())
+
+
+atexit.register(_schedule_client_close)
 
 
 def _extract_next_cursor(next_url: Optional[str]) -> Optional[str]:
@@ -40,13 +77,14 @@ def _extract_next_cursor(next_url: Optional[str]) -> Optional[str]:
 
 def _approximate_count_flag(result_type: str, count: int) -> bool:
     """Approximate counts apply for certain types over 2000 results."""
-    return result_type in {"d", "r"} and count > 2000
+    return result_type in {"d", "r", "rd"} and count > 2000
 
 
 async def _get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """GET JSON with consistent error messages."""
     try:
-        resp = await client.get(url, params=params)
+        client_instance = await _get_client()
+        resp = await client_instance.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPStatusError as e:
@@ -58,7 +96,8 @@ async def _get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[s
 async def _post_json(url: str, json_body: Dict[str, Any], params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """POST JSON with consistent error messages."""
     try:
-        resp = await client.post(url, params=params, json=json_body)
+        client_instance = await _get_client()
+        resp = await client_instance.post(url, params=params, json=json_body)
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPStatusError as e:
@@ -103,6 +142,7 @@ async def courtlistener_search(
         "q": query,
         "type": type,
         "format": "json",
+        "page_size": limit,
     }
 
     courts_joined = _courts_param(courts)
@@ -206,7 +246,7 @@ async def courtlistener_get_opinion(
 @mcp.tool()
 async def courtlistener_get_cluster(
     cluster_id: int,
-    include_opinions: bool = True,
+    include_opinions: bool = False,
     opinion_text_format: str = "html_with_citations",
 ) -> Dict[str, Any]:
     """Retrieve a cluster (case) by cluster ID."""
@@ -232,16 +272,30 @@ async def courtlistener_get_cluster(
         "raw": cluster,
     }
 
-    if include_opinions:
-        opinions: List[Dict[str, Any]] = []
+    if include_opinions and result["sub_opinions"]:
+        opinion_tasks = []
+        opinion_ids: List[int] = []
         for op_uri in result["sub_opinions"]:
             m = re.search(r"/opinions/(\d+)/", str(op_uri))
             if not m:
                 continue
             op_id = int(m.group(1))
-            op = await courtlistener_get_opinion(opinion_id=op_id, text_format=opinion_text_format)
-            opinions.append(op)
+            opinion_ids.append(op_id)
+            opinion_tasks.append(
+                courtlistener_get_opinion(opinion_id=op_id, text_format=opinion_text_format)
+            )
+
+        opinions: List[Dict[str, Any]] = []
+        opinion_errors: List[Dict[str, Any]] = []
+        for op_id, op_result in zip(opinion_ids, await asyncio.gather(*opinion_tasks, return_exceptions=True)):
+            if isinstance(op_result, Exception):
+                opinion_errors.append({"opinion_id": op_id, "error": str(op_result)})
+            else:
+                opinions.append(op_result)
+
         result["opinions"] = opinions
+        if opinion_errors:
+            result["opinion_errors"] = opinion_errors
 
     return result
 

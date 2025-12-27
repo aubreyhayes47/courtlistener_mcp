@@ -163,6 +163,8 @@ Once registered with an MCP-capable client, agents can call:
 }
 ```
 
+> Note: `include_opinions` defaults to `false` to avoid long fan-out requests when clusters contain many sub-opinions.
+
 **Retrieve a specific opinion document**
 
 ```json
@@ -185,7 +187,7 @@ Once registered with an MCP-capable client, agents can call:
 
 - Correct API versions: everything uses `/api/rest/v4/...` (no v3 endpoints).
 - Correct identifiers: search returns clusters; website URLs contain cluster IDs; opinions fetched by opinion IDs.
-- Consistent HTTP behavior: single shared async client, consistent timeouts, consistent error handling.
+- Consistent HTTP behavior: client is created lazily with consistent timeouts and closed via the provided helper.
 - Consistent output: all tools return normalized JSON objects (not fragile formatted strings).
 - Field selection: opinion fetch uses `fields=` to reduce payload size.
 - Pagination support: search returns `next_cursor` for agents to continue.
