@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-port = int(os.environ.get("PORT", "8000"))
+port = int(os.environ.get("PORT", "10000"))
 
 mcp = FastMCP("courtlistener", host="0.0.0.0", port=port)
 
@@ -378,4 +378,4 @@ async def courtlistener_resolve_from_url(
 
 
 if __name__ == "__main__":
-    mcp.run(transport="http", host="0.0.0.0", port=port)
+    mcp.run(transport="streamable-http")
