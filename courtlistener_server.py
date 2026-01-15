@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 port = int(os.environ.get("PORT", "10000"))
 
@@ -30,6 +32,18 @@ client: Optional[httpx.AsyncClient] = None
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+
+@mcp.custom_route("/", methods=["GET", "HEAD"], name="root")
+async def root(request: Request) -> Response:
+    """Lightweight health check endpoint for platform probes."""
+    return JSONResponse(
+        {
+            "status": "ok",
+            "service": "courtlistener-mcp",
+            "mcp_endpoint": "/mcp",
+        }
+    )
 
 
 def _get_api_token() -> str:
