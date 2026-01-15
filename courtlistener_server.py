@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -181,7 +182,7 @@ def _courts_param(courts: Optional[List[str]]) -> Optional[str]:
 async def courtlistener_search(
     query: str,
     type: str = "o",
-    courts: Optional[List[str]] = None,
+    courts: List[str] = Field(default_factory=list),
     semantic: bool = False,
     order_by: Optional[str] = None,
     highlight: bool = False,
