@@ -99,6 +99,8 @@ Then pass the returned `court_ids` into search:
 
 Search via `/api/rest/v4/search/` across multiple corpora. Returns a normalized, agent-friendly list (default limit = 10) and a `next_cursor`.
 
+The response always includes a `warnings` array reminding consumers that LLM summaries can be wrong and to include CourtListener links (`url`) when citing results.
+
 **Input contract**
 
 - `query` is required

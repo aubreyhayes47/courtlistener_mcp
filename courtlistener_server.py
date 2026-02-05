@@ -29,6 +29,14 @@ USER_AGENT = "courtlistener-mcp/1.0 (+https://www.courtlistener.com/)"
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_REQUEST_RETRIES = 3
 
+
+SEARCH_WARNINGS: List[Dict[str, str]] = [
+    {
+        "code": "LLM_SUMMARY_CAUTION",
+        "message": "Search results may be incomplete and LLM summaries can be wrong. Verify against the linked CourtListener page(s). When answering, include CourtListener URLs (the 'url' field) for each cited result.",
+    }
+]
+
 # Lazily created shared async client to avoid import-time side effects.
 client: Optional[httpx.AsyncClient] = None
 
@@ -408,6 +416,7 @@ async def courtlistener_search(
         "count": count,
         "approximate": approximate,
         "next_cursor": next_cursor,
+        "warnings": SEARCH_WARNINGS,
         "results": normalized_results,
         **(
             {"court_resolution": {**court_resolution, "used_courts": merged_courts}}
@@ -513,10 +522,18 @@ async def courtlistener_get_cluster(
         for op_id, op_result in zip(
             opinion_ids, await asyncio.gather(*opinion_tasks, return_exceptions=True)
         ):
-            if isinstance(op_result, Exception):
+            if isinstance(op_result, BaseException):
                 opinion_errors.append({"opinion_id": op_id, "error": str(op_result)})
             else:
-                opinions.append(op_result)
+                if not isinstance(op_result, dict):
+                    opinion_errors.append(
+                        {
+                            "opinion_id": op_id,
+                            "error": "Unexpected opinion result type",
+                        }
+                    )
+                else:
+                    opinions.append(op_result)
 
         result["opinions"] = opinions
         if opinion_errors:

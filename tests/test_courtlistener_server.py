@@ -117,6 +117,7 @@ async def test_search_normalization(server):
     assert request.url.params["page_size"] == "5"
     assert result["approximate"] is True
     assert result["next_cursor"] == "next-cursor"
+    assert result["warnings"][0]["code"] == "LLM_SUMMARY_CAUTION"
     assert len(result["results"]) == 1
     assert result["results"][0]["title"] == "Test Case"
     assert (
@@ -163,6 +164,7 @@ async def test_search_with_court_query(server):
     request = search_route.calls[0].request
     assert request.url.params["q"] == "test query"
     assert "scotus" in request.url.params["court"].split("+")
+    assert result["warnings"][0]["code"] == "LLM_SUMMARY_CAUTION"
     assert "court_resolution" in result
     assert "scotus" in result["court_resolution"]["used_courts"]
 
