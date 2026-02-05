@@ -1,8 +1,9 @@
 # Deploying a CourtListener MCP Server on Render
 
-This guide walks through creating and deploying a Python MCP server that speaks to the CourtListener v4 REST APIs and exposes four reliable tools:
+This guide walks through creating and deploying a Python MCP server that speaks to the CourtListener v4 REST APIs and exposes five reliable tools:
 
 - `courtlistener.search` — search across case law / PACER / judges / oral arguments (Citegeist search API)
+- `courtlistener.find_court` — resolve a court string to CourtListener `court_id` codes (via `courts_db`)
 - `courtlistener.get_cluster` — retrieve a case (cluster) by cluster ID (the ID in CourtListener opinion URLs)
 - `courtlistener.get_opinion` — retrieve a specific opinion document by opinion ID (full text)
 - `courtlistener.resolve_from_url` — paste a CourtListener URL and get back the underlying cluster + opinions
@@ -20,7 +21,7 @@ You will deploy the MCP server to Render using HTTP transport so multiple client
 Install dependencies locally:
 
 ```bash
-pip install "mcp[cli]" httpx
+pip install "mcp[cli]" httpx courts-db
 ```
 
 ### CourtListener API Token
@@ -67,7 +68,7 @@ mcp[cli]
 httpx
 ```
 
-## Implementation: The MCP Server (All 4 Tools)
+## Implementation: The MCP Server (All 5 Tools)
 
 The server is implemented in `courtlistener_server.py`. Key reliability goals:
 
@@ -76,7 +77,23 @@ The server is implemented in `courtlistener_server.py`. Key reliability goals:
 - Uses CourtListener v4 endpoints everywhere
 - Uses field selection on opinion fetches to keep payloads small
 
-The file defines four tools:
+The file defines five tools:
+
+### 0) `courtlistener.find_court`
+
+Resolve a human court string (or CourtListener identifier) to CourtListener `court_id` codes using the `courts_db` dataset.
+
+Example flow (resolve then search):
+
+```json
+{ "query": "Supreme Court of the United States" }
+```
+
+Then pass the returned `court_ids` into search:
+
+```json
+{ "query": "habeas", "type": "o", "courts": ["scotus"], "limit": 10 }
+```
 
 ### 1) `courtlistener.search`
 
@@ -87,6 +104,8 @@ Search via `/api/rest/v4/search/` across multiple corpora. Returns a normalized,
 - `query` is required
 - `type` selects what you’re searching
 - `courts` is an optional list of `court_id` codes
+- `court_query` is an optional human court string (resolved to `court_id` codes via `courts_db`)
+- `court_bankruptcy` and `court_date_found` optionally refine `court_query` resolution
 - `semantic` only applies to `type="o"`
 - `highlight` toggles snippet highlighting
 - `cursor` supports pagination

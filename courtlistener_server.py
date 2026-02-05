@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+from datetime import datetime
 import logging
 import os
 import re
 from typing import Any, Dict, List, Optional
 
+import courts_db
 import httpx
 from mcp.server.fastmcp import FastMCP
-from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -67,7 +68,9 @@ async def _get_client() -> httpx.AsyncClient:
             "Accept": "application/json",
             "User-Agent": USER_AGENT,
         }
-        client = httpx.AsyncClient(headers=headers, timeout=DEFAULT_TIMEOUT, limits=CLIENT_LIMITS)
+        client = httpx.AsyncClient(
+            headers=headers, timeout=DEFAULT_TIMEOUT, limits=CLIENT_LIMITS
+        )
     return client
 
 
@@ -125,12 +128,16 @@ async def _request_json(
 
     for attempt in range(1, MAX_REQUEST_RETRIES + 1):
         try:
-            resp = await client_instance.request(method, url, params=params, json=json_body)
+            resp = await client_instance.request(
+                method, url, params=params, json=json_body
+            )
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
-            should_retry = status in RETRYABLE_STATUS_CODES and attempt < MAX_REQUEST_RETRIES
+            should_retry = (
+                status in RETRYABLE_STATUS_CODES and attempt < MAX_REQUEST_RETRIES
+            )
             log_data = {
                 "status": status,
                 "url": str(e.request.url),
@@ -142,11 +149,14 @@ async def _request_json(
                 await asyncio.sleep(0.5 * attempt)
                 last_error = e
                 continue
-            raise RuntimeError(f"CourtListener HTTP error {status}: {e.response.text[:500]}")
+            raise RuntimeError(
+                f"CourtListener HTTP error {status}: {e.response.text[:500]}"
+            )
         except httpx.RequestError as e:
             should_retry = attempt < MAX_REQUEST_RETRIES
             logger.warning(
-                "CourtListener request error", extra={"attempt": attempt, "retry": should_retry, "url": url}
+                "CourtListener request error",
+                extra={"attempt": attempt, "retry": should_retry, "url": url},
             )
             if should_retry:
                 await asyncio.sleep(0.5 * attempt)
@@ -160,12 +170,16 @@ async def _request_json(
     raise RuntimeError("CourtListener request failed for unknown reasons")
 
 
-async def _get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def _get_json(
+    url: str, params: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """GET JSON with consistent error messages and retry behavior."""
     return await _request_json("GET", url, params=params)
 
 
-async def _post_json(url: str, json_body: Dict[str, Any], params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def _post_json(
+    url: str, json_body: Dict[str, Any], params: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """POST JSON with consistent error messages and retry behavior."""
     return await _request_json("POST", url, params=params, json_body=json_body)
 
@@ -178,18 +192,118 @@ def _courts_param(courts: Optional[List[str]]) -> Optional[str]:
     return "+".join(cleaned) if cleaned else None
 
 
+def _parse_date_found(date_found: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO date/datetime string for courts_db filtering.
+
+    Accepts:
+    - YYYY-MM-DD
+    - full ISO 8601 datetimes (optionally with trailing 'Z')
+    """
+
+    if date_found is None:
+        return None
+    cleaned = date_found.strip()
+    if not cleaned:
+        return None
+
+    # Common case: date-only string.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", cleaned):
+        try:
+            return datetime.strptime(cleaned, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("date_found must be a valid ISO date like 'YYYY-MM-DD'")
+
+    # More flexible: ISO datetime. Normalize trailing Z.
+    try:
+        normalized = cleaned[:-1] + "+00:00" if cleaned.endswith("Z") else cleaned
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        raise ValueError(
+            "date_found must be ISO 8601 (e.g., 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM:SS')"
+        )
+
+
+@mcp.tool()
+async def courtlistener_find_court(
+    query: str,
+    bankruptcy: Optional[bool] = None,
+    date_found: Optional[str] = None,
+    include_records: bool = False,
+) -> Dict[str, Any]:
+    """Resolve a court name/string to CourtListener court_id codes.
+
+    This uses the local `courts_db` dataset (maintained by Free Law Project) to map
+    messy court strings to one or more CourtListener court identifiers.
+
+    Args:
+        query: CourtListener court identifier or a human court string.
+        bankruptcy: Optional bankruptcy filter for ambiguous district courts.
+        date_found: Optional ISO date/datetime string used to disambiguate historical courts.
+        include_records: When true, return courts_db records for each resolved id.
+
+    Returns:
+        Dict with stable keys: court_ids, ambiguous, and (optionally) records_by_id.
+    """
+
+    if not query or not query.strip():
+        raise ValueError("query is required")
+
+    dt_found = _parse_date_found(date_found)
+
+    kwargs: Dict[str, Any] = {}
+    if bankruptcy is not None:
+        kwargs["bankruptcy"] = bankruptcy
+    if dt_found is not None:
+        kwargs["date_found"] = dt_found
+
+    court_ids = courts_db.find_court(query.strip(), **kwargs)
+    if not isinstance(court_ids, list):
+        court_ids = list(court_ids or [])
+
+    result: Dict[str, Any] = {
+        "query": query,
+        "bankruptcy": bankruptcy,
+        "date_found": date_found,
+        "court_ids": court_ids,
+        "ambiguous": len(court_ids) > 1,
+    }
+
+    if include_records:
+        records_by_id: Dict[str, Any] = {}
+        for court_id in court_ids:
+            try:
+                records_by_id[court_id] = courts_db.find_court_by_id(court_id)
+            except Exception as e:
+                records_by_id[court_id] = {"error": str(e)}
+        result["records_by_id"] = records_by_id
+
+    return result
+
+
 @mcp.tool()
 async def courtlistener_search(
     query: str,
     type: str = "o",
-    courts: List[str] = Field(default_factory=list),
+    courts: Optional[List[str]] = None,
+    court_query: Optional[str] = None,
+    court_bankruptcy: Optional[bool] = None,
+    court_date_found: Optional[str] = None,
     semantic: bool = False,
     order_by: Optional[str] = None,
     highlight: bool = False,
     limit: int = 10,
     cursor: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Search CourtListener via the v4 Search API."""
+    """Search CourtListener via the v4 Search API.
+
+    Court filtering options:
+    - Provide `courts` as one or more CourtListener `court_id` values (e.g., "scotus", "ca9").
+    - Or provide `court_query` as a human string; it will be resolved via `courts_db` and merged
+      with `courts` (deduped, preserving order).
+
+    When `court_query` is used, the response includes a `court_resolution` block showing the
+    resolved ids and the final `used_courts` list that was applied to the search.
+    """
     if not query or not query.strip():
         raise ValueError("query is required")
 
@@ -202,6 +316,27 @@ async def courtlistener_search(
     if limit < 1 or limit > 50:
         raise ValueError("limit must be between 1 and 50")
 
+    resolved_court_ids: List[str] = []
+    court_resolution: Optional[Dict[str, Any]] = None
+    if court_query and court_query.strip():
+        resolution_kwargs: Dict[str, Any] = {}
+        if court_bankruptcy is not None:
+            resolution_kwargs["bankruptcy"] = court_bankruptcy
+        dt_found = _parse_date_found(court_date_found)
+        if dt_found is not None:
+            resolution_kwargs["date_found"] = dt_found
+        resolved_court_ids = courts_db.find_court(
+            court_query.strip(), **resolution_kwargs
+        )
+        if not isinstance(resolved_court_ids, list):
+            resolved_court_ids = list(resolved_court_ids or [])
+        court_resolution = {
+            "input": court_query,
+            "bankruptcy": court_bankruptcy,
+            "date_found": court_date_found,
+            "resolved_ids": resolved_court_ids,
+        }
+
     params: Dict[str, Any] = {
         "q": query,
         "type": type,
@@ -209,7 +344,15 @@ async def courtlistener_search(
         "page_size": limit,
     }
 
-    courts_joined = _courts_param(courts)
+    merged_courts: List[str] = []
+    for value in (courts or []) + (resolved_court_ids or []):
+        if not value or not str(value).strip():
+            continue
+        cid = str(value).strip()
+        if cid not in merged_courts:
+            merged_courts.append(cid)
+
+    courts_joined = _courts_param(merged_courts)
     if courts_joined:
         params["court"] = courts_joined
 
@@ -242,13 +385,18 @@ async def courtlistener_search(
 
         normalized_results.append(
             {
-                "title": item.get("caseName") or item.get("name") or item.get("docketNumber") or "(unknown)",
+                "title": item.get("caseName")
+                or item.get("name")
+                or item.get("docketNumber")
+                or "(unknown)",
                 "cluster_id": item.get("cluster_id"),
                 "docket_id": item.get("docket_id"),
                 "court": item.get("court"),
                 "court_id": item.get("court_id"),
                 "date_filed": item.get("dateFiled"),
-                "url": ("https://www.courtlistener.com" + item["absolute_url"]) if item.get("absolute_url") else None,
+                "url": ("https://www.courtlistener.com" + item["absolute_url"])
+                if item.get("absolute_url")
+                else None,
                 "citation": item.get("citation"),
                 "snippet": item.get("snippet") or None,
                 "score": score,
@@ -261,6 +409,11 @@ async def courtlistener_search(
         "approximate": approximate,
         "next_cursor": next_cursor,
         "results": normalized_results,
+        **(
+            {"court_resolution": {**court_resolution, "used_courts": merged_courts}}
+            if court_resolution
+            else {}
+        ),
     }
 
 
@@ -315,7 +468,9 @@ async def courtlistener_get_cluster(
 ) -> Dict[str, Any]:
     """Retrieve a cluster (case) by cluster ID."""
     if opinion_text_format not in {"html_with_citations", "plain_text"}:
-        raise ValueError("opinion_text_format must be 'html_with_citations' or 'plain_text'")
+        raise ValueError(
+            "opinion_text_format must be 'html_with_citations' or 'plain_text'"
+        )
 
     cluster_url = f"{CLUSTERS_ENDPOINT}/{cluster_id}/"
     cluster = await _get_json(cluster_url)
@@ -323,7 +478,9 @@ async def courtlistener_get_cluster(
     result: Dict[str, Any] = {
         "cluster_id": cluster.get("id"),
         "absolute_url": cluster.get("absolute_url"),
-        "url": ("https://www.courtlistener.com" + cluster["absolute_url"]) if cluster.get("absolute_url") else None,
+        "url": ("https://www.courtlistener.com" + cluster["absolute_url"])
+        if cluster.get("absolute_url")
+        else None,
         "case_name": cluster.get("case_name"),
         "case_name_full": cluster.get("case_name_full"),
         "docket": cluster.get("docket"),
@@ -346,12 +503,16 @@ async def courtlistener_get_cluster(
             op_id = int(m.group(1))
             opinion_ids.append(op_id)
             opinion_tasks.append(
-                courtlistener_get_opinion(opinion_id=op_id, text_format=opinion_text_format)
+                courtlistener_get_opinion(
+                    opinion_id=op_id, text_format=opinion_text_format
+                )
             )
 
         opinions: List[Dict[str, Any]] = []
         opinion_errors: List[Dict[str, Any]] = []
-        for op_id, op_result in zip(opinion_ids, await asyncio.gather(*opinion_tasks, return_exceptions=True)):
+        for op_id, op_result in zip(
+            opinion_ids, await asyncio.gather(*opinion_tasks, return_exceptions=True)
+        ):
             if isinstance(op_result, Exception):
                 opinion_errors.append({"opinion_id": op_id, "error": str(op_result)})
             else:
@@ -376,7 +537,9 @@ async def courtlistener_resolve_from_url(
 
     m = re.search(r"/opinion/(\d+)/", url)
     if not m:
-        raise ValueError("Unsupported URL format. Expected a CourtListener /opinion/<cluster_id>/ URL.")
+        raise ValueError(
+            "Unsupported URL format. Expected a CourtListener /opinion/<cluster_id>/ URL."
+        )
 
     cluster_id = int(m.group(1))
     cluster = await courtlistener_get_cluster(

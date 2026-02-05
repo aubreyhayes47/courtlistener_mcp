@@ -3,6 +3,10 @@
 ## Project overview
 This repository hosts a Python MCP (Model Context Protocol) server that wraps CourtListener v4 REST APIs. The server is implemented in `courtlistener_server.py` and exposes tools for search, cluster retrieval, opinion retrieval, and URL resolution. The service is intended to run as a standalone HTTP MCP server (Render-friendly).
 
+The server also includes a `courts_db`-powered court resolution tool to map human court strings to CourtListener `court_id` codes, which can then be used to filter search results.
+
+In addition to accepting explicit `court_id` values, the search tool also supports `court_query` (a human court string) that is resolved via `courts_db` and applied as a CourtListener search filter.
+
 ## Key architecture notes
 - **Single async client:** The server uses a lazily-created shared `httpx.AsyncClient` with retries, timeouts, and a consistent auth header.
 - **CourtListener v4 only:** All endpoints are `/api/rest/v4/...`.

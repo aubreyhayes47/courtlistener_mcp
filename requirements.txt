@@ -1,5 +1,6 @@
 mcp[cli]
 httpx
+courts-db
 pytest
 pytest-asyncio
 respx

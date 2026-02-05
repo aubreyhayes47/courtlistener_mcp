@@ -25,11 +25,54 @@ async def server(monkeypatch):
 async def test_helper_utilities(server):
     assert server._extract_next_cursor(None) is None
     assert (
-        server._extract_next_cursor("https://example.com/search/?cursor=test-cursor&foo=bar")
+        server._extract_next_cursor(
+            "https://example.com/search/?cursor=test-cursor&foo=bar"
+        )
         == "test-cursor"
     )
     assert server._courts_param(None) is None
     assert server._courts_param(["ca1", " ca2 "]) == "ca1+ca2"
+
+
+@pytest.mark.asyncio
+async def test_find_court_basic(server):
+    result = await server.courtlistener_find_court(
+        query="Supreme Court of the United States"
+    )
+    assert isinstance(result["court_ids"], list)
+    assert "scotus" in result["court_ids"]
+    assert result["ambiguous"] == (len(result["court_ids"]) > 1)
+
+
+@pytest.mark.asyncio
+async def test_find_court_ambiguous_and_bankruptcy_filter(server):
+    result = await server.courtlistener_find_court(query="District of Massachusetts")
+    ids = set(result["court_ids"])
+    assert {"mad", "mab"}.issubset(ids)
+
+    bk = await server.courtlistener_find_court(
+        query="District of Massachusetts", bankruptcy=True
+    )
+    assert "mab" in bk["court_ids"]
+    assert "mad" not in bk["court_ids"]
+
+
+@pytest.mark.asyncio
+async def test_find_court_date_found_validation(server):
+    with pytest.raises(ValueError):
+        await server.courtlistener_find_court(
+            query="District of Massachusetts", date_found="not-a-date"
+        )
+
+
+@pytest.mark.asyncio
+async def test_find_court_include_records(server):
+    result = await server.courtlistener_find_court(
+        query="Supreme Court of the United States",
+        include_records=True,
+    )
+    assert "records_by_id" in result
+    assert "scotus" in result["records_by_id"]
 
 
 @respx.mock
@@ -76,8 +119,52 @@ async def test_search_normalization(server):
     assert result["next_cursor"] == "next-cursor"
     assert len(result["results"]) == 1
     assert result["results"][0]["title"] == "Test Case"
-    assert result["results"][0]["url"] == "https://www.courtlistener.com/opinion/123/test-case/"
+    assert (
+        result["results"][0]["url"]
+        == "https://www.courtlistener.com/opinion/123/test-case/"
+    )
     assert result["results"][0]["score"] == 42.0
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_search_with_court_query(server):
+    search_route = respx.get(server.SEARCH_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "count": 1,
+                "next": None,
+                "results": [
+                    {
+                        "caseName": "Test Case",
+                        "cluster_id": 123,
+                        "docket_id": 456,
+                        "court": "Supreme Court of the United States",
+                        "court_id": "scotus",
+                        "dateFiled": "2020-01-01",
+                        "absolute_url": "/opinion/123/test-case/",
+                        "citation": "123 U.S. 456",
+                        "snippet": "Example snippet",
+                        "meta": {"score": {"bm25": 42.0}},
+                    }
+                ],
+            },
+        )
+    )
+
+    result = await server.courtlistener_search(
+        query="test query",
+        type="o",
+        court_query="Supreme Court of the United States",
+        limit=1,
+    )
+
+    request = search_route.calls[0].request
+    assert request.url.params["q"] == "test query"
+    assert "scotus" in request.url.params["court"].split("+")
+    assert "court_resolution" in result
+    assert "scotus" in result["court_resolution"]["used_courts"]
 
 
 @respx.mock
@@ -103,7 +190,9 @@ async def test_get_opinion(server):
         )
     )
 
-    result = await server.courtlistener_get_opinion(opinion_id=999, text_format="plain_text")
+    result = await server.courtlistener_get_opinion(
+        opinion_id=999, text_format="plain_text"
+    )
 
     assert opinion_route.called
     assert result["opinion_id"] == 999
@@ -127,7 +216,9 @@ async def test_get_cluster_with_opinions(server):
                 "court_id": "scotus",
                 "date_filed": "2020-01-01",
                 "citations": [],
-                "sub_opinions": ["https://www.courtlistener.com/api/rest/v4/opinions/999/"],
+                "sub_opinions": [
+                    "https://www.courtlistener.com/api/rest/v4/opinions/999/"
+                ],
             },
         )
     )
@@ -151,7 +242,9 @@ async def test_get_cluster_with_opinions(server):
         )
     )
 
-    result = await server.courtlistener_get_cluster(cluster_id=123, include_opinions=True)
+    result = await server.courtlistener_get_cluster(
+        cluster_id=123, include_opinions=True
+    )
 
     assert result["cluster_id"] == 123
     assert result["url"] == "https://www.courtlistener.com/opinion/123/test-case/"
@@ -176,7 +269,9 @@ async def test_resolve_from_url(server):
                 "court_id": "scotus",
                 "date_filed": "2020-01-01",
                 "citations": [],
-                "sub_opinions": ["https://www.courtlistener.com/api/rest/v4/opinions/999/"],
+                "sub_opinions": [
+                    "https://www.courtlistener.com/api/rest/v4/opinions/999/"
+                ],
             },
         )
     )
@@ -215,4 +310,6 @@ async def test_resolve_from_url(server):
 @pytest.mark.asyncio
 async def test_resolve_from_url_validation(server):
     with pytest.raises(ValueError):
-        await server.courtlistener_resolve_from_url(url="https://www.example.com/invalid")
+        await server.courtlistener_resolve_from_url(
+            url="https://www.example.com/invalid"
+        )
