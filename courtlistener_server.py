@@ -231,7 +231,7 @@ def _parse_date_found(date_found: Optional[str]) -> Optional[datetime]:
         )
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def courtlistener_find_court(
     query: str,
     bankruptcy: Optional[bool] = None,
@@ -288,7 +288,7 @@ async def courtlistener_find_court(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def courtlistener_search(
     query: str,
     type: str = "o",
@@ -426,7 +426,7 @@ async def courtlistener_search(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def courtlistener_get_opinion(
     opinion_id: int,
     text_format: str = "html_with_citations",
@@ -469,7 +469,7 @@ async def courtlistener_get_opinion(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def courtlistener_get_cluster(
     cluster_id: int,
     include_opinions: bool = False,
@@ -542,7 +542,7 @@ async def courtlistener_get_cluster(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 async def courtlistener_resolve_from_url(
     url: str,
     include_opinions: bool = True,
