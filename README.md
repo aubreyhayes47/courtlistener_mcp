@@ -163,6 +163,13 @@ For HTTP transport, FastMCP exposes the JSON-RPC endpoint at `/mcp`.
 
 Once registered with an MCP-capable client, agents can call:
 
+## MCP Prompts
+
+This server also exposes MCP prompts (templates returned by `prompts/get` that clients can apply when talking to a model).
+
+- `legal_research` — a short checklist for jurisdiction-aware case-law research using the `courtlistener.*` tools.
+  - Arguments: `question` (required), `court_query`, `date_window`, `court_level`, `notes`
+
 **Search for cases (10 results)**
 
 ```json
@@ -171,6 +178,19 @@ Once registered with an MCP-capable client, agents can call:
   "type": "o",
   "courts": ["ca5"],
   "limit": 10
+}
+```
+
+**Get the legal research checklist prompt**
+
+```json
+{
+  "name": "legal_research",
+  "arguments": {
+    "question": "What is the standard for fair use in the Ninth Circuit?",
+    "court_query": "Ninth Circuit",
+    "date_window": "all years"
+  }
 }
 ```
 

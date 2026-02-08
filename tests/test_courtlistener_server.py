@@ -35,6 +35,25 @@ async def test_helper_utilities(server):
 
 
 @pytest.mark.asyncio
+async def test_legal_research_prompt_registered(server):
+    prompts = await server.mcp.list_prompts()
+    assert any(p.name == "legal_research" for p in prompts)
+
+    rendered = await server.mcp.get_prompt(
+        "legal_research",
+        arguments={"question": "What is the standard for fair use?"},
+    )
+    assert isinstance(rendered.messages, list)
+    assert rendered.messages
+    assert any(getattr(m, "role", None) == "user" for m in rendered.messages)
+    assert any(
+        "What is the standard for fair use?"
+        in str(getattr(getattr(m, "content", None), "text", ""))
+        for m in rendered.messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_find_court_basic(server):
     result = await server.courtlistener_find_court(
         query="Supreme Court of the United States"

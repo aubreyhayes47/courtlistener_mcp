@@ -54,6 +54,9 @@ When modifying this repo, follow these LLM-oriented best practices:
 - `COURTLISTENER_API_TOKEN` **must** be provided.
 - `PORT` controls the HTTP listener.
 
+## MCP prompts
+- `legal_research` — a short checklist prompt to guide jurisdiction-aware case-law research using the `courtlistener.*` tools.
+
 ## Suggested prompts for MCP clients
 - "Search for case law in the 9th Circuit about fair use."
 - "Resolve this CourtListener URL and return the opinions."

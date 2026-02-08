@@ -56,6 +56,80 @@ async def root(request: Request) -> Response:
     )
 
 
+@mcp.prompt(
+    name="legal_research",
+    title="Legal Research Checklist",
+    description=(
+        "Jurisdiction-aware case-law research checklist using CourtListener MCP tools; "
+        "emphasizes date-window gating and holding verification."
+    ),
+)
+def legal_research(
+    question: str,
+    court_query: Optional[str] = None,
+    date_window: Optional[str] = None,
+    court_level: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return a short checklist prompt for doing legal research with CourtListener MCP tools.
+
+    Arguments are plain strings for broad client compatibility. This prompt is intentionally
+    checklist-oriented (not a full memo/table template).
+    """
+
+    # Keep this compact and operational: remind the model/client about required gating
+    # and how to use the server's tools safely.
+    checklist = "\n".join(
+        [
+            "Follow this checklist before finalizing any legal conclusions:",
+            "",
+            "1) Scope gate (required): Confirm jurisdiction + court level + date window.",
+            "   - If date window is missing, ask for it.",
+            "   - If user insists on a quick answer without a date window, assume: all years (state this explicitly).",
+            "   - Normalize any relative dates (e.g., 'last year') to absolute dates in your final output.",
+            "",
+            "2) Court filtering: Prefer explicit court filters before broad searching.",
+            "   - If you have a human court string, call courtlistener.find_court(query=...).",
+            "   - Use the returned court_ids as courts=[...]. courts must be a list, not a scalar string.",
+            "",
+            "3) Search and refine (start narrow):",
+            "   - Call courtlistener.search(query=..., type='o', courts=[...], limit=10).",
+            "   - Iterate by tightening issue terms, adding/removing courts, and adjusting date window.",
+            "",
+            "4) Verify holdings (required):",
+            "   - Do not rely on search snippets for holdings.",
+            "   - For top cases, pull primary material via courtlistener.get_cluster(include_opinions=True) and/or courtlistener.get_opinion(...).",
+            "   - Label each case: 'Verified holding' (opinion text reviewed) vs 'Inferred from metadata/treatment'.",
+            "",
+            "5) Output requirements (concise):",
+            "   - State scope (issue, jurisdiction/courts, date range) and explicit assumptions.",
+            "   - Provide a short ranked list of key cases with CourtListener URL(s) and verification label for each.",
+            "   - If jurisdiction/date scope remains uncertain, stop and ask clarifying questions rather than guessing.",
+        ]
+    )
+
+    # Fill in user-provided context in a deterministic, low-entropy format.
+    user_lines = [
+        "Research inputs:",
+        f"- question: {question.strip()}",
+        f"- court_query: {(court_query or '').strip() or '(not provided)'}",
+        f"- date_window: {(date_window or '').strip() or '(not provided)'}",
+        f"- court_level: {(court_level or '').strip() or '(not provided)'}",
+        f"- notes: {(notes or '').strip() or '(not provided)'}",
+    ]
+
+    return [
+        {
+            "role": "user",
+            "content": checklist,
+        },
+        {
+            "role": "user",
+            "content": "\n".join(user_lines),
+        },
+    ]
+
+
 def _get_api_token() -> str:
     token = os.environ.get("COURTLISTENER_API_TOKEN")
     if not token:
