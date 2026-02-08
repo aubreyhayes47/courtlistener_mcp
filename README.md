@@ -216,3 +216,7 @@ Once registered with an MCP-capable client, agents can call:
 ## Notes on Logging
 
 If you add logging, use Python’s `logging` and write to stderr. For HTTP mode on Render, stdout is acceptable, but structured logging is preferred.
+
+## License
+
+MIT License. See `LICENSE`.

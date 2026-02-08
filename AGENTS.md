@@ -59,5 +59,8 @@ When modifying this repo, follow these LLM-oriented best practices:
 - "Resolve this CourtListener URL and return the opinions."
 - "Fetch the full text of opinion ID 12345 as plain text."
 
+## License
+MIT License. See `LICENSE`.
+
 ---
 If you introduce new tools or change existing ones, update both this file and the README so that downstream users understand the contract.
